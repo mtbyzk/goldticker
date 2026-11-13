@@ -6,18 +6,15 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: ubuntu-latest
+    container: theos/theos:latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build tools
-        run: brew install ldid dpkg xz
-
-      - name: Setup Theos
+      - name: Show environment
         run: |
-          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
-          git clone --depth 1 https://github.com/theos/sdks.git "$HOME/theos/sdks"
-          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          echo "THEOS=$THEOS"
+          ls "$THEOS/sdks" 2>/dev/null | tail -5 || true
 
       - name: Build package
         run: make package FINALPACKAGE=1
@@ -27,3 +24,4 @@ jobs:
         with:
           name: goldticker-deb
           path: packages/*.deb
+          if-no-files-found: warn
