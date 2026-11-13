@@ -94,8 +94,10 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (void)fireAlert:(double)price threshold:(double)threshold;
 - (NSString *)alertPath;
 - (void)playAlert;
+- (void)stopAlertSound;
 - (void)buildBannerIfNeeded;
 - (void)showBanner:(NSString *)text;
+- (void)showBanner:(NSString *)text sticky:(BOOL)sticky;
 - (void)hideBanner;
 @end
 
@@ -495,7 +497,11 @@ static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
     BOOL alertEnabled = GTPrefBool(@"alert_enable", YES);
 
     if (!alertEnabled || threshold <= 0) {
-        self.alerting = NO;
+        [self stopAlertSound];
+        if (self.alerting) {
+            self.alerting = NO;
+            [self hideBanner];
+        }
         self.priceLabel.textColor = [self statusBarTextColor];
         return;
     }
@@ -505,18 +511,31 @@ static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
         if (!self.alerting) {
             self.alerting = YES;
             [self fireAlert:price threshold:threshold];
+        } else {
+            // 一直循环提醒：横幅常驻并刷新最新价，音乐停了就续上
+            [self fireAlert:price threshold:threshold];
         }
     } else {
         self.priceLabel.textColor = [self statusBarTextColor];
-        // 回升到提醒价上方 0.2% 才重新武装，避免价格贴着阈值反复响
-        if (price > threshold * 1.002) self.alerting = NO;
+        // 回升到提醒价上方 0.2% 才停止提醒并重新武装，避免价格贴着阈值反复响
+        if (price > threshold * 1.002 && self.alerting) {
+            self.alerting = NO;
+            [self stopAlertSound];
+            [self hideBanner];
+        }
     }
 }
 
 - (void)fireAlert:(double)price threshold:(double)threshold {
-    [self showBanner:[NSString stringWithFormat:@"金价 %.2f 已低于提醒价 %.2f", price, threshold]];
+    [self showBanner:[NSString stringWithFormat:@"金价 %.2f 已低于提醒价 %.2f\n价格回到提醒价上方后自动停止提醒",
+                      price, threshold]
+              sticky:YES];
     if (GTPrefBool(@"sound_enable", YES)) {
-        [self playAlert];
+        if (!self.player.isPlaying) {
+            [self playAlert];
+        }
+    } else {
+        [self stopAlertSound];
     }
 }
 
@@ -551,9 +570,16 @@ static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
         AudioServicesPlaySystemSound(1005);
         return;
     }
-    self.player.numberOfLoops = 2;
+    self.player.numberOfLoops = -1;   // 一直循环播放，直到价格回升
     self.player.volume = 1.0;
     [self.player play];
+}
+
+- (void)stopAlertSound {
+    if (self.player) {
+        [self.player stop];
+        self.player = nil;
+    }
 }
 
 #pragma mark 横幅
@@ -588,13 +614,19 @@ static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
 }
 
 - (void)showBanner:(NSString *)text {
+    [self showBanner:text sticky:NO];
+}
+
+- (void)showBanner:(NSString *)text sticky:(BOOL)sticky {
     if (![NSThread isMainThread]) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self showBanner:text];
+            [self showBanner:text sticky:sticky];
         });
         return;
     }
     [self buildBannerIfNeeded];
+
+    BOOL visible = !self.bannerBox.hidden && self.bannerBox.alpha > 0.95;
 
     self.bannerLabel.text = text;
     CGSize screen = UIScreen.mainScreen.bounds.size;
@@ -608,13 +640,17 @@ static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
     self.bannerBox.frame = CGRectMake((screen.width - width) / 2.0, 12.0, width, height);
     self.bannerLabel.frame = CGRectMake(14.0, 12.0, width - 28.0, height - 24.0);
     self.bannerBox.hidden = NO;
-    self.bannerBox.alpha = 0.0;
-    [UIView animateWithDuration:0.25 animations:^{
-        self.bannerBox.alpha = 1.0;
-    }];
+    if (!visible) {
+        self.bannerBox.alpha = 0.0;
+        [UIView animateWithDuration:0.25 animations:^{
+            self.bannerBox.alpha = 1.0;
+        }];
+    }
 
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(hideBanner) object:nil];
-    [self performSelector:@selector(hideBanner) withObject:nil afterDelay:6.0];
+    if (!sticky) {
+        [self performSelector:@selector(hideBanner) withObject:nil afterDelay:6.0];
+    }
 }
 
 - (void)hideBanner {
