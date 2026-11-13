@@ -1,14 +1,22 @@
 #!/bin/bash
-# 安装后刷新图标缓存，让「金价设置」出现在桌面
-UICACHE=/var/jb/usr/bin/uicache
-if [ ! -x "$UICACHE" ]; then
-    UICACHE=/usr/bin/uicache
-fi
-if [ -x "$UICACHE" ]; then
-    "$UICACHE" -a >/dev/null 2>&1 || true
-fi
-export PATH=/var/jb/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin
-if command -v sbreload >/dev/null 2>&1; then
-    (sbreload >/dev/null 2>&1 &) || true
-fi
+# 安装/升级后刷新图标缓存，确保桌面出现「金价设置」
+LOG=/var/tmp/goldticker_install.log
+
+{
+    echo "== $(date) =="
+    echo "app exists: $([ -d /var/jb/Applications/GoldTickerSettings.app ] && echo yes || echo no)"
+    for U in /var/jb/usr/bin/uicache /usr/bin/uicache /var/jb/usr/bin/uicache-static; do
+        if [ -x "$U" ]; then
+            echo "run: $U -a"
+            "$U" -a
+            echo "exit=$?"
+        fi
+    done
+} >> "$LOG" 2>&1
+
+sync
+
+# 重建图标缓存后重启 SpringBoard，确保图标立即出现
+killall -9 SpringBoard >> "$LOG" 2>&1
+
 exit 0
