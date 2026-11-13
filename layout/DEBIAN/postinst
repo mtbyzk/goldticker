@@ -1,0 +1,14 @@
+#!/bin/bash
+# 安装后刷新图标缓存，让「金价设置」出现在桌面
+UICACHE=/var/jb/usr/bin/uicache
+if [ ! -x "$UICACHE" ]; then
+    UICACHE=/usr/bin/uicache
+fi
+if [ -x "$UICACHE" ]; then
+    "$UICACHE" -a >/dev/null 2>&1 || true
+fi
+export PATH=/var/jb/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin
+if command -v sbreload >/dev/null 2>&1; then
+    (sbreload >/dev/null 2>&1 &) || true
+fi
+exit 0
