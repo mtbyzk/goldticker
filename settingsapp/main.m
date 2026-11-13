@@ -44,8 +44,10 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
 @property (nonatomic, strong) UITextField *thresholdField;
 @property (nonatomic, strong) UISlider *offsetXSlider;
 @property (nonatomic, strong) UISlider *offsetYSlider;
+@property (nonatomic, strong) UISlider *fontSizeSlider;
 @property (nonatomic, strong) UILabel *offsetXValue;
 @property (nonatomic, strong) UILabel *offsetYValue;
+@property (nonatomic, strong) UILabel *fontSizeValue;
 @end
 
 @implementation GTSettingsController
@@ -118,12 +120,19 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
                                         max:20.0
                                       value:GTPrefDouble(@"offset_y", 0)
                                       label:self.offsetYValue];
+
+    self.fontSizeValue = [[UILabel alloc] init];
+    self.fontSizeSlider = [self addSliderRow:@"文字大小"
+                                         min:7.0
+                                         max:16.0
+                                       value:(GTPrefDouble(@"font_size", 0) > 0 ? GTPrefDouble(@"font_size", 10) : 10.0)
+                                       label:self.fontSizeValue];
     [self refreshSliderLabels];
 
     [stack addArrangedSubview:GTLabel(@"留空表示不提醒。价格跌破该值时会播放音乐并弹出横幅；价格回升到 1.002 倍以上才会重新武装。",
                                       [UIFont systemFontOfSize:13],
                                       [UIColor secondaryLabelColor])];
-    [stack addArrangedSubview:GTLabel(@"位置是相对「时钟右侧默认位置」的偏移量，保存后 1 秒内生效。若防烧屏开着，价签还会每 10 分钟自动左右微移 2pt、上下微移 1pt。",
+    [stack addArrangedSubview:GTLabel(@"位置是相对「时钟右侧默认位置」的偏移量，保存后 1 秒内生效。若防烧屏开着，价签还会每 10 分钟自动左右微移 1pt（不再上下移动）。",
                                       [UIFont systemFontOfSize:13],
                                       [UIColor secondaryLabelColor])];
     [stack addArrangedSubview:GTLabel(@"自定义音乐：把音频放到 /var/mobile/Library/GoldTicker/alert.m4a（也支持 mp3 / wav / caf / aac），文件名固定为 alert。",
@@ -216,8 +225,10 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
 - (void)refreshSliderLabels {
     NSInteger x = (NSInteger)self.offsetXSlider.value;
     NSInteger y = (NSInteger)self.offsetYSlider.value;
+    NSInteger fontSize = (NSInteger)(self.fontSizeSlider.value + 0.5);
     self.offsetXValue.text = [NSString stringWithFormat:@"%+ld pt", (long)x];
     self.offsetYValue.text = [NSString stringWithFormat:@"%+ld pt", (long)y];
+    self.fontSizeValue.text = [NSString stringWithFormat:@"%ld pt", (long)fontSize];
 }
 
 - (void)save {
@@ -227,6 +238,7 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
     GTPrefSet(@"burnin", @(self.burninSwitch.on));
     GTPrefSet(@"offset_x", @((double)self.offsetXSlider.value));
     GTPrefSet(@"offset_y", @((double)self.offsetYSlider.value));
+    GTPrefSet(@"font_size", @((double)(NSInteger)(self.fontSizeSlider.value + 0.5)));
 
     double interval = [self.intervalField.text doubleValue];
     if (interval < 3.0) interval = 3.0;
