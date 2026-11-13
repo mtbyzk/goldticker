@@ -59,6 +59,14 @@ static NSArray<NSString *> *GTDataDirs(void) {
 @property (nonatomic, assign) BOOL alerting;
 @property (nonatomic, assign) NSInteger retry;
 
+/** 防烧屏：当前是否在第三方 App 内（不在主屏/锁屏） */
+@property (nonatomic, assign) BOOL inApp;
+/** 防烧屏：每 10 分钟递增一次，用来左右交替微移 */
+@property (nonatomic, assign) NSInteger driftStep;
+@property (nonatomic, strong) NSTimer *burninTimer;
+/** 每 10 秒重新套用一次配色，保证设置里开关后用不着切 App */
+@property (nonatomic, assign) NSInteger tickCount;
+
 + (instancetype)shared;
 - (void)start;
 
@@ -74,6 +82,15 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (void)onTick:(NSTimer *)timer;
 - (void)refresh;
 - (void)refreshSina;
+- (void)setupBurnIn;
+- (void)onBurninTick:(NSTimer *)timer;
+- (void)appDidActivate:(NSNotification *)note;
+- (void)appDidDeactivate:(NSNotification *)note;
+- (void)updateAppearance;
+- (UIColor *)normalTextColor;
+- (UIColor *)normalShadowColor;
+- (CGFloat)driftX;
+- (CGFloat)driftY;
 - (double)parseJZJ:(NSData *)data;
 - (double)parseSina:(NSString *)text;
 - (NSArray *)fieldsFor:(NSString *)code in:(NSString *)text;
@@ -112,6 +129,7 @@ static NSArray<NSString *> *GTDataDirs(void) {
             return;
         }
         [self buildBarWindow];
+        [self setupBurnIn];
         self.timer = [NSTimer timerWithTimeInterval:1.0
                                              target:self
                                            selector:@selector(onTick:)
@@ -151,11 +169,13 @@ static NSArray<NSString *> *GTDataDirs(void) {
 
 - (void)buildBarWindow {
     CGSize screen = UIScreen.mainScreen.bounds.size;
-    UIWindow *window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, screen.width, [self statusBarHeight])];
+    // 多留 24pt 纵向空间，方便用户把价格往下调
+    UIWindow *window = [[UIWindow alloc] initWithFrame:CGRectMake(0, 0, screen.width, [self statusBarHeight] + 24.0)];
     window.windowScene = [self activeScene];
     window.windowLevel = UIWindowLevelStatusBar + 1;
     window.backgroundColor = UIColor.clearColor;
     window.userInteractionEnabled = NO;
+    window.clipsToBounds = NO;
     window.hidden = NO;
     self.barWindow = window;
 
@@ -214,6 +234,7 @@ static NSArray<NSString *> *GTDataDirs(void) {
 
 - (void)layoutPriceLabel {
     if (!self.priceLabel) return;
+    CGFloat statusHeight = [self statusBarHeight];
     CGFloat barHeight = self.barWindow.bounds.size.height;
     CGRect clock = [self clockRectOnScreen];
     NSString *text = self.priceLabel.text.length ? self.priceLabel.text : @"----";
@@ -226,14 +247,93 @@ static NSArray<NSString *> *GTDataDirs(void) {
         font = [UIFont monospacedDigitSystemFontOfSize:9.0 weight:UIFontWeightSemibold];
         size = [text sizeWithAttributes:@{NSFontAttributeName : font}];
     }
+    // 用户在设置里配置的横/纵偏移 + 防烧屏微移
+    CGFloat offsetX = GTPrefDouble(@"offset_x", 0);
+    CGFloat offsetY = GTPrefDouble(@"offset_y", 0);
+    x += offsetX + [self driftX];
     if (x + size.width > limit) {
         x = MAX(4.0, limit - size.width);
     }
+
+    CGFloat y = ceil((statusHeight - size.height) / 2.0) + offsetY + [self driftY];
+    y = MAX(0.0, MIN(y, barHeight - size.height));
+
     self.priceLabel.font = font;
-    self.priceLabel.frame = CGRectMake(x,
-                                       ceil((barHeight - size.height) / 2.0),
-                                       size.width + 2.0,
-                                       size.height);
+    self.priceLabel.frame = CGRectMake(x, y, size.width + 2.0, size.height);
+}
+
+#pragma mark 防烧屏
+
+- (void)setupBurnIn {
+    if (self.burninTimer) return;
+
+    // SpringBoard 会给前后台切换发这些通知：App 激活 = 不在主屏
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserver:self
+               selector:@selector(appDidActivate:)
+                   name:@"SBApplicationDidBecomeActiveNotification"
+                 object:nil];
+    [center addObserver:self
+               selector:@selector(appDidDeactivate:)
+                   name:@"SBApplicationDidResignActiveNotification"
+                 object:nil];
+    [center addObserver:self
+               selector:@selector(appDidDeactivate:)
+                   name:@"SBApplicationDidExitNotification"
+                 object:nil];
+
+    // 每 10 分钟微移一次，避免同一像素长期高亮
+    self.burninTimer = [NSTimer timerWithTimeInterval:600.0
+                                               target:self
+                                             selector:@selector(onBurninTick:)
+                                             userInfo:nil
+                                              repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:self.burninTimer forMode:NSRunLoopCommonModes];
+
+    [self updateAppearance];
+}
+
+- (void)onBurninTick:(NSTimer *)timer {
+    self.driftStep = self.driftStep + 1;
+    [self layoutPriceLabel];
+}
+
+- (void)appDidActivate:(NSNotification *)note {
+    self.inApp = YES;
+    [self updateAppearance];
+}
+
+- (void)appDidDeactivate:(NSNotification *)note {
+    self.inApp = NO;
+    [self updateAppearance];
+}
+
+/** 主屏用白字（配黑描边），其它 App 用黑字（配白描边） */
+- (UIColor *)normalTextColor {
+    if (self.inApp && GTPrefBool(@"burnin", YES)) return UIColor.blackColor;
+    return UIColor.whiteColor;
+}
+
+- (UIColor *)normalShadowColor {
+    if (self.inApp && GTPrefBool(@"burnin", YES)) return UIColor.whiteColor;
+    return UIColor.blackColor;
+}
+
+- (void)updateAppearance {
+    if (!self.priceLabel) return;
+    if (!self.alerting) self.priceLabel.textColor = [self normalTextColor];
+    self.priceLabel.layer.shadowColor = [self normalShadowColor].CGColor;
+    [self layoutPriceLabel];
+}
+
+- (CGFloat)driftX {
+    if (!GTPrefBool(@"burnin", YES)) return 0;
+    return (self.driftStep % 2 == 0) ? -2.0 : 2.0;
+}
+
+- (CGFloat)driftY {
+    if (!GTPrefBool(@"burnin", YES)) return 0;
+    return (self.driftStep % 4 < 2) ? 0.0 : -1.0;
 }
 
 #pragma mark 定时与刷新
@@ -245,6 +345,11 @@ static NSArray<NSString *> *GTDataDirs(void) {
         if (!enabled) return;
 
         [self layoutPriceLabel];
+
+        self.tickCount = self.tickCount + 1;
+        if (self.tickCount % 10 == 0) {
+            [self updateAppearance];
+        }
 
         double interval = GTPrefDouble(@"interval", 5.0);
         if (interval < 3.0) interval = 3.0;
@@ -374,7 +479,7 @@ static NSArray<NSString *> *GTDataDirs(void) {
 
     if (!alertEnabled || threshold <= 0) {
         self.alerting = NO;
-        self.priceLabel.textColor = UIColor.whiteColor;
+        self.priceLabel.textColor = [self normalTextColor];
         return;
     }
 
@@ -385,7 +490,7 @@ static NSArray<NSString *> *GTDataDirs(void) {
             [self fireAlert:price threshold:threshold];
         }
     } else {
-        self.priceLabel.textColor = UIColor.whiteColor;
+        self.priceLabel.textColor = [self normalTextColor];
         // 回升到提醒价上方 0.2% 才重新武装，避免价格贴着阈值反复响
         if (price > threshold * 1.002) self.alerting = NO;
     }
