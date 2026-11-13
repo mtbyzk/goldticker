@@ -39,8 +39,13 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
 @property (nonatomic, strong) UISwitch *enabledSwitch;
 @property (nonatomic, strong) UISwitch *alertSwitch;
 @property (nonatomic, strong) UISwitch *soundSwitch;
+@property (nonatomic, strong) UISwitch *burninSwitch;
 @property (nonatomic, strong) UITextField *intervalField;
 @property (nonatomic, strong) UITextField *thresholdField;
+@property (nonatomic, strong) UISlider *offsetXSlider;
+@property (nonatomic, strong) UISlider *offsetYSlider;
+@property (nonatomic, strong) UILabel *offsetXValue;
+@property (nonatomic, strong) UILabel *offsetYValue;
 @end
 
 @implementation GTSettingsController
@@ -87,6 +92,8 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
                                     value:GTPrefBool(@"alert_enable", YES)];
     self.soundSwitch = [self addSwitchRow:@"提醒时播放音乐"
                                     value:GTPrefBool(@"sound_enable", YES)];
+    self.burninSwitch = [self addSwitchRow:@"防烧屏（主屏白字 / App 内黑字，定时微移）"
+                                     value:GTPrefBool(@"burnin", YES)];
 
     // 输入行
     double interval = GTPrefDouble(@"interval", 5.0);
@@ -97,7 +104,26 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
     NSString *thresholdText = threshold ? [NSString stringWithFormat:@"%.2f", [threshold doubleValue]] : @"";
     self.thresholdField = [self addFieldRow:@"提醒金额（元/克）" text:thresholdText keyboard:UIKeyboardTypeDecimalPad];
 
+    // 位置微调
+    self.offsetXValue = [[UILabel alloc] init];
+    self.offsetXSlider = [self addSliderRow:@"横向位置（负数左移 / 正数右移）"
+                                        min:-60.0
+                                        max:60.0
+                                      value:GTPrefDouble(@"offset_x", 0)
+                                      label:self.offsetXValue];
+
+    self.offsetYValue = [[UILabel alloc] init];
+    self.offsetYSlider = [self addSliderRow:@"竖向位置（负数上移 / 正数下移）"
+                                        min:-8.0
+                                        max:20.0
+                                      value:GTPrefDouble(@"offset_y", 0)
+                                      label:self.offsetYValue];
+    [self refreshSliderLabels];
+
     [stack addArrangedSubview:GTLabel(@"留空表示不提醒。价格跌破该值时会播放音乐并弹出横幅；价格回升到 1.002 倍以上才会重新武装。",
+                                      [UIFont systemFontOfSize:13],
+                                      [UIColor secondaryLabelColor])];
+    [stack addArrangedSubview:GTLabel(@"位置是相对「时钟右侧默认位置」的偏移量，保存后 1 秒内生效。若防烧屏开着，价签还会每 10 分钟自动左右微移 2pt、上下微移 1pt。",
                                       [UIFont systemFontOfSize:13],
                                       [UIColor secondaryLabelColor])];
     [stack addArrangedSubview:GTLabel(@"自定义音乐：把音频放到 /var/mobile/Library/GoldTicker/alert.m4a（也支持 mp3 / wav / caf / aac），文件名固定为 alert。",
@@ -154,10 +180,53 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
     return field;
 }
 
+- (UISlider *)addSliderRow:(NSString *)title min:(float)min max:(float)max value:(float)value label:(UILabel *)valueLabel {
+    UIStackView *box = [[UIStackView alloc] init];
+    box.axis = UILayoutConstraintAxisVertical;
+    box.spacing = 6.0;
+
+    UIStackView *head = [[UIStackView alloc] init];
+    head.axis = UILayoutConstraintAxisHorizontal;
+    head.alignment = UIStackViewAlignmentCenter;
+    [head addArrangedSubview:GTLabel(title, [UIFont systemFontOfSize:14], [UIColor secondaryLabelColor])];
+    [head addArrangedSubview:[[UIView alloc] init]];
+
+    valueLabel.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightMedium];
+    valueLabel.textColor = [UIColor systemBlueColor];
+    valueLabel.textAlignment = NSTextAlignmentRight;
+    [head addArrangedSubview:valueLabel];
+    [box addArrangedSubview:head];
+
+    UISlider *slider = [[UISlider alloc] init];
+    slider.minimumValue = min;
+    slider.maximumValue = max;
+    slider.value = value;
+    [slider addTarget:self action:@selector(sliderChanged:)
+     forControlEvents:UIControlEventValueChanged];
+    [box addArrangedSubview:slider];
+
+    [[self stack] addArrangedSubview:box];
+    return slider;
+}
+
+- (void)sliderChanged:(UISlider *)sender {
+    [self refreshSliderLabels];
+}
+
+- (void)refreshSliderLabels {
+    NSInteger x = (NSInteger)self.offsetXSlider.value;
+    NSInteger y = (NSInteger)self.offsetYSlider.value;
+    self.offsetXValue.text = [NSString stringWithFormat:@"%+ld pt", (long)x];
+    self.offsetYValue.text = [NSString stringWithFormat:@"%+ld pt", (long)y];
+}
+
 - (void)save {
     GTPrefSet(@"enable", @(self.enabledSwitch.on));
     GTPrefSet(@"alert_enable", @(self.alertSwitch.on));
     GTPrefSet(@"sound_enable", @(self.soundSwitch.on));
+    GTPrefSet(@"burnin", @(self.burninSwitch.on));
+    GTPrefSet(@"offset_x", @((double)self.offsetXSlider.value));
+    GTPrefSet(@"offset_y", @((double)self.offsetYSlider.value));
 
     double interval = [self.intervalField.text doubleValue];
     if (interval < 3.0) interval = 3.0;
