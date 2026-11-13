@@ -237,13 +237,17 @@ static NSArray<NSString *> *GTDataDirs(void) {
     CGRect clock = [self clockRectOnScreen];
     NSString *text = self.priceLabel.text.length ? self.priceLabel.text : @"----";
 
-    UIFont *font = [UIFont monospacedDigitSystemFontOfSize:10.0 weight:UIFontWeightSemibold];
+    CGFloat fontSize = GTPrefDouble(@"font_size", 0);
+    if (fontSize <= 0) fontSize = 10.0;
+    fontSize = MAX(7.0, MIN(fontSize, 16.0));
+    UIFont *font = [UIFont monospacedDigitSystemFontOfSize:fontSize weight:UIFontWeightSemibold];
     CGSize size = [text sizeWithAttributes:@{NSFontAttributeName : font}];
     CGFloat x = clock.size.width > 0 ? CGRectGetMaxX(clock) + 4.0 : 92.0;
     CGFloat limit = UIScreen.mainScreen.bounds.size.width * 0.5 - 36.0;
     if (x + size.width > limit) {
-        font = [UIFont monospacedDigitSystemFontOfSize:9.0 weight:UIFontWeightSemibold];
-        size = [text sizeWithAttributes:@{NSFontAttributeName : font}];
+        UIFont *smaller = [UIFont monospacedDigitSystemFontOfSize:fontSize - 1.0 weight:UIFontWeightSemibold];
+        size = [text sizeWithAttributes:@{NSFontAttributeName : smaller}];
+        if (x + size.width <= limit) font = smaller;
     }
     // 用户在设置里配置的横/纵偏移 + 防烧屏微移
     CGFloat offsetX = GTPrefDouble(@"offset_x", 0);
@@ -351,12 +355,12 @@ static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
 
 - (CGFloat)driftX {
     if (!GTPrefBool(@"burnin", YES)) return 0;
-    return (self.driftStep % 2 == 0) ? -2.0 : 2.0;
+    return (self.driftStep % 2 == 0) ? -1.0 : 1.0;
 }
 
 - (CGFloat)driftY {
-    if (!GTPrefBool(@"burnin", YES)) return 0;
-    return (self.driftStep % 4 < 2) ? 0.0 : -1.0;
+    // 纵向不再漂移，只做横向微移
+    return 0;
 }
 
 #pragma mark 定时与刷新
