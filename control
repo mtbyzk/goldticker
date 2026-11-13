@@ -1,6 +1,6 @@
 Package: com.aprin.goldticker
 Name: 金价状态栏
-Version: 1.2.2
+Version: 1.2.3
 Architecture: iphoneos-arm64
 Description: 在状态栏时钟右侧实时显示金价，跌破设定金额时播放自定义音乐并弹出横幅提醒。
 Maintainer: Aprin
