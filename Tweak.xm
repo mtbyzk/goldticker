@@ -88,7 +88,6 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (void)appDidDeactivate:(NSNotification *)note;
 - (void)updateAppearance;
 - (UIColor *)normalTextColor;
-- (UIColor *)normalShadowColor;
 - (CGFloat)driftX;
 - (CGFloat)driftY;
 - (double)parseJZJ:(NSData *)data;
@@ -314,15 +313,12 @@ static NSArray<NSString *> *GTDataDirs(void) {
     return UIColor.whiteColor;
 }
 
-- (UIColor *)normalShadowColor {
-    if (self.inApp && GTPrefBool(@"burnin", YES)) return UIColor.whiteColor;
-    return UIColor.blackColor;
-}
-
 - (void)updateAppearance {
     if (!self.priceLabel) return;
+    BOOL dark = self.inApp && GTPrefBool(@"burnin", YES);
     if (!self.alerting) self.priceLabel.textColor = [self normalTextColor];
-    self.priceLabel.layer.shadowColor = [self normalShadowColor].CGColor;
+    // App 内只要纯黑字，不要任何描边/阴影；主屏白字保留黑描边保证可读
+    self.priceLabel.layer.shadowOpacity = dark ? 0.0 : 0.9;
     [self layoutPriceLabel];
 }
 
