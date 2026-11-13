@@ -13,6 +13,7 @@ GoldTicker_FRAMEWORKS = UIKit Foundation QuartzCore AVFoundation AudioToolbox
 include $(THEOS_MAKE_PATH)/tweak.mk
 
 SUBPROJECTS += prefs
+SUBPROJECTS += settingsapp
 include $(THEOS_MAKE_PATH)/aggregate.mk
 
 after-install::
