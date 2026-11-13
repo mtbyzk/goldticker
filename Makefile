@@ -7,7 +7,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = GoldTicker
 GoldTicker_FILES = Tweak.xm
-GoldTicker_CFLAGS = -fobjc-arc
+GoldTicker_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-error
 GoldTicker_FRAMEWORKS = UIKit Foundation QuartzCore AVFoundation AudioToolbox
 
 include $(THEOS_MAKE_PATH)/tweak.mk
