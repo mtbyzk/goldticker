@@ -6,4 +6,5 @@ Description: 在状态栏时钟右侧实时显示金价，跌破设定金额时�
 Maintainer: Aprin
 Author: Aprin
 Section: Tweaks
-Depends: firmware (>= 15.0), preferenceloader
+Depends: firmware (>= 15.0)
+Recommends: preferenceloader
