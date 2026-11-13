@@ -3,6 +3,6 @@ on:
   workflow_dispatch:
 jobs:
   m:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
-      - run: sw_vers
+      - run: sw_vers && xcodebuild -version
