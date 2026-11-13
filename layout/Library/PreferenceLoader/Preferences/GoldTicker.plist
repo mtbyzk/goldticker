@@ -1,0 +1,8 @@
+{
+	entry = {
+		bundle = GoldTickerPrefs;
+		cell = PSLinkCell;
+		detail = RootListController;
+		label = 金价;
+	};
+}
