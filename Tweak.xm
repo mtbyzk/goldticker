@@ -66,6 +66,8 @@ static NSArray<NSString *> *GTDataDirs(void) {
 @property (nonatomic, strong) NSTimer *burninTimer;
 /** 每 10 秒重新套用一次配色，保证设置里开关后用不着切 App */
 @property (nonatomic, assign) NSInteger tickCount;
+/** 当前前台 App 的 bundle id，用来过滤迟到的失活通知 */
+@property (nonatomic, copy) NSString *activeBundle;
 
 + (instancetype)shared;
 - (void)start;
@@ -87,6 +89,7 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (void)appDidActivate:(NSNotification *)note;
 - (void)appDidDeactivate:(NSNotification *)note;
 - (void)updateAppearance;
+- (BOOL)detectInAppInsteadOf:(BOOL)fallback;
 - (UIColor *)normalTextColor;
 - (CGFloat)driftX;
 - (CGFloat)driftY;
@@ -266,20 +269,18 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (void)setupBurnIn {
     if (self.burninTimer) return;
 
-    // SpringBoard 会给前后台切换发这些通知：App 激活 = 不在主屏
+    // SpringBoard 前后台切换通知（不同系统版本名字略有差异，多注册几个）
     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-    [center addObserver:self
-               selector:@selector(appDidActivate:)
-                   name:@"SBApplicationDidBecomeActiveNotification"
-                 object:nil];
-    [center addObserver:self
-               selector:@selector(appDidDeactivate:)
-                   name:@"SBApplicationDidResignActiveNotification"
-                 object:nil];
-    [center addObserver:self
-               selector:@selector(appDidDeactivate:)
-                   name:@"SBApplicationDidExitNotification"
-                 object:nil];
+    for (NSString *name in @[ @"SBApplicationDidBecomeActiveNotification",
+                              @"SBApplicationDidActivateNotification",
+                              @"SBApplicationDidLaunchNotification" ]) {
+        [center addObserver:self selector:@selector(appDidActivate:) name:name object:nil];
+    }
+    for (NSString *name in @[ @"SBApplicationDidResignActiveNotification",
+                              @"SBApplicationDidDeactivateNotification",
+                              @"SBApplicationDidExitNotification" ]) {
+        [center addObserver:self selector:@selector(appDidDeactivate:) name:name object:nil];
+    }
 
     // 每 10 分钟微移一次，避免同一像素长期高亮
     self.burninTimer = [NSTimer timerWithTimeInterval:600.0
@@ -297,14 +298,89 @@ static NSArray<NSString *> *GTDataDirs(void) {
     [self layoutPriceLabel];
 }
 
+/** 通知里的对象是 SBApplication，取出它的 bundle id */
+static NSString *GTBundleOfNotification(NSNotification *note) {
+    id object = note.object;
+    if (!object) return nil;
+    @try {
+        if ([object respondsToSelector:@selector(bundleIdentifier)]) {
+            id bundle = [object bundleIdentifier];
+            if ([bundle isKindOfClass:[NSString class]]) return bundle;
+        }
+        id bundle = [object valueForKey:@"bundleIdentifier"];
+        if ([bundle isKindOfClass:[NSString class]]) return bundle;
+    } @catch (NSException *exception) {
+    }
+    return nil;
+}
+
 - (void)appDidActivate:(NSNotification *)note {
-    self.inApp = YES;
-    [self updateAppearance];
+    NSString *bundle = GTBundleOfNotification(note);
+    // 主屏（SpringBoard）自己激活不算进入 App
+    if ([bundle isEqualToString:@"com.apple.springboard"]) return;
+    self.activeBundle = bundle;
+    if (!self.inApp) {
+        self.inApp = YES;
+        [self updateAppearance];
+    }
 }
 
 - (void)appDidDeactivate:(NSNotification *)note {
-    self.inApp = NO;
-    [self updateAppearance];
+    NSString *bundle = GTBundleOfNotification(note);
+    if ([bundle isEqualToString:@"com.apple.springboard"]) return;
+    // bundle 未知时不轻信（可能只是 SpringBoard 自己的失活），交给 3 秒轮询校正
+    if (!bundle) return;
+    // 切到新 App 时，旧 App 的迟到失活通知不能把我们拉回主屏状态
+    if (self.activeBundle && ![bundle isEqualToString:self.activeBundle]) return;
+    self.activeBundle = nil;
+    if (self.inApp) {
+        self.inApp = NO;
+        [self updateAppearance];
+    }
+}
+
+/** 兜底：直接问 SpringBoard 当前有没有 App 在前台（通知失效时用） */
+- (BOOL)detectInAppInsteadOf:(BOOL)fallback {
+    Class controllerClass = NSClassFromString(@"SBApplicationController");
+    if (!controllerClass) return fallback;
+
+    id controller = nil;
+    @try {
+        if ([controllerClass respondsToSelector:@selector(sharedInstance)]) {
+            controller = [controllerClass performSelector:@selector(sharedInstance)];
+        }
+    } @catch (NSException *exception) {
+        return fallback;
+    }
+    if (!controller) return fallback;
+
+    NSArray *apps = nil;
+    @try {
+        if ([controller respondsToSelector:@selector(allApplications)]) {
+            apps = [controller allApplications];
+        }
+    } @catch (NSException *exception) {
+        return fallback;
+    }
+    if (![apps isKindOfClass:[NSArray class]] || apps.count == 0) return fallback;
+
+    NSInteger usable = 0;
+    BOOL frontmost = NO;
+    for (id app in apps) {
+        @try {
+            id bundle = [app valueForKey:@"bundleIdentifier"];
+            if ([bundle isKindOfClass:[NSString class]] &&
+                [bundle isEqualToString:@"com.apple.springboard"]) continue;
+            id value = [app valueForKey:@"frontmost"];
+            if ([value isKindOfClass:[NSNumber class]]) {
+                usable++;
+                if ([value boolValue]) frontmost = YES;
+            }
+        } @catch (NSException *exception) {
+        }
+    }
+    if (usable == 0) return fallback;
+    return frontmost;
 }
 
 /** 主屏用白字（配黑描边），其它 App 用黑字（配白描边） */
@@ -343,6 +419,14 @@ static NSArray<NSString *> *GTDataDirs(void) {
         [self layoutPriceLabel];
 
         self.tickCount = self.tickCount + 1;
+        // 每 3 秒用 SpringBoard 的真实状态校正一次，避免通知漏发导致一直是白字
+        if (self.tickCount % 3 == 0) {
+            BOOL detected = [self detectInAppInsteadOf:self.inApp];
+            if (detected != self.inApp) {
+                self.inApp = detected;
+                [self updateAppearance];
+            }
+        }
         if (self.tickCount % 10 == 0) {
             [self updateAppearance];
         }
