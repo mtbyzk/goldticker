@@ -20,6 +20,9 @@ jobs:
           git clone --depth 1 https://github.com/theos/sdks.git "$HOME/theos/sdks"
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
 
+      - name: Fix script permissions
+        run: chmod +x layout/DEBIAN/postinst layout/DEBIAN/preinst layout/DEBIAN/prerm layout/DEBIAN/postrm 2>/dev/null || true
+
       - name: Build package
         run: make package FINALPACKAGE=1
 
