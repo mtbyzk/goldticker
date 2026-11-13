@@ -357,7 +357,7 @@ static NSString *GTBundleOfNotification(NSNotification *note) {
     NSArray *apps = nil;
     @try {
         if ([controller respondsToSelector:@selector(allApplications)]) {
-            apps = [controller allApplications];
+            apps = (NSArray *)[controller performSelector:@selector(allApplications)];
         }
     } @catch (NSException *exception) {
         return fallback;
