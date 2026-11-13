@@ -59,15 +59,11 @@ static NSArray<NSString *> *GTDataDirs(void) {
 @property (nonatomic, assign) BOOL alerting;
 @property (nonatomic, assign) NSInteger retry;
 
-/** 防烧屏：当前是否在第三方 App 内（不在主屏/锁屏） */
-@property (nonatomic, assign) BOOL inApp;
 /** 防烧屏：每 10 分钟递增一次，用来左右交替微移 */
 @property (nonatomic, assign) NSInteger driftStep;
 @property (nonatomic, strong) NSTimer *burninTimer;
-/** 每 10 秒重新套用一次配色，保证设置里开关后用不着切 App */
-@property (nonatomic, assign) NSInteger tickCount;
-/** 当前前台 App 的 bundle id，用来过滤迟到的失活通知 */
-@property (nonatomic, copy) NSString *activeBundle;
+/** 状态栏时钟视图，用来跟系统取同一个前景色（主屏白 / App 内黑） */
+@property (nonatomic, weak) UIView *clockView;
 
 + (instancetype)shared;
 - (void)start;
@@ -86,11 +82,8 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (void)refreshSina;
 - (void)setupBurnIn;
 - (void)onBurninTick:(NSTimer *)timer;
-- (void)appDidActivate:(NSNotification *)note;
-- (void)appDidDeactivate:(NSNotification *)note;
 - (void)updateAppearance;
-- (BOOL)detectInAppInsteadOf:(BOOL)fallback;
-- (UIColor *)normalTextColor;
+- (UIColor *)statusBarTextColor;
 - (CGFloat)driftX;
 - (CGFloat)driftY;
 - (double)parseJZJ:(NSData *)data;
@@ -211,6 +204,7 @@ static NSArray<NSString *> *GTDataDirs(void) {
         if (window == self.barWindow || window == self.bannerWindow) continue;
         UIView *view = [self clockViewIn:window regex:regex];
         if (view) {
+            self.clockView = view;
             CGRect rect = [view convertRect:view.bounds toView:nil];
             return CGRectOffset(rect, window.frame.origin.x, window.frame.origin.y);
         }
@@ -269,19 +263,6 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (void)setupBurnIn {
     if (self.burninTimer) return;
 
-    // SpringBoard 前后台切换通知（不同系统版本名字略有差异，多注册几个）
-    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
-    for (NSString *name in @[ @"SBApplicationDidBecomeActiveNotification",
-                              @"SBApplicationDidActivateNotification",
-                              @"SBApplicationDidLaunchNotification" ]) {
-        [center addObserver:self selector:@selector(appDidActivate:) name:name object:nil];
-    }
-    for (NSString *name in @[ @"SBApplicationDidResignActiveNotification",
-                              @"SBApplicationDidDeactivateNotification",
-                              @"SBApplicationDidExitNotification" ]) {
-        [center addObserver:self selector:@selector(appDidDeactivate:) name:name object:nil];
-    }
-
     // 每 10 分钟微移一次，避免同一像素长期高亮
     self.burninTimer = [NSTimer timerWithTimeInterval:600.0
                                                target:self
@@ -298,104 +279,72 @@ static NSArray<NSString *> *GTDataDirs(void) {
     [self layoutPriceLabel];
 }
 
-/** 通知里的对象是 SBApplication，取出它的 bundle id */
-static NSString *GTBundleOfNotification(NSNotification *note) {
-    id object = note.object;
-    if (!object) return nil;
-    @try {
-        if ([object respondsToSelector:@selector(bundleIdentifier)]) {
-            id bundle = [object bundleIdentifier];
-            if ([bundle isKindOfClass:[NSString class]]) return bundle;
-        }
-        id bundle = [object valueForKey:@"bundleIdentifier"];
-        if ([bundle isKindOfClass:[NSString class]]) return bundle;
-    } @catch (NSException *exception) {
-    }
-    return nil;
-}
-
-- (void)appDidActivate:(NSNotification *)note {
-    NSString *bundle = GTBundleOfNotification(note);
-    // 主屏（SpringBoard）自己激活不算进入 App
-    if ([bundle isEqualToString:@"com.apple.springboard"]) return;
-    self.activeBundle = bundle;
-    if (!self.inApp) {
-        self.inApp = YES;
-        [self updateAppearance];
-    }
-}
-
-- (void)appDidDeactivate:(NSNotification *)note {
-    NSString *bundle = GTBundleOfNotification(note);
-    if ([bundle isEqualToString:@"com.apple.springboard"]) return;
-    // bundle 未知时不轻信（可能只是 SpringBoard 自己的失活），交给 3 秒轮询校正
-    if (!bundle) return;
-    // 切到新 App 时，旧 App 的迟到失活通知不能把我们拉回主屏状态
-    if (self.activeBundle && ![bundle isEqualToString:self.activeBundle]) return;
-    self.activeBundle = nil;
-    if (self.inApp) {
-        self.inApp = NO;
-        [self updateAppearance];
-    }
-}
-
-/** 兜底：直接问 SpringBoard 当前有没有 App 在前台（通知失效时用） */
-- (BOOL)detectInAppInsteadOf:(BOOL)fallback {
-    Class controllerClass = NSClassFromString(@"SBApplicationController");
-    if (!controllerClass) return fallback;
-
-    id controller = nil;
-    @try {
-        if ([controllerClass respondsToSelector:@selector(sharedInstance)]) {
-            controller = [controllerClass performSelector:@selector(sharedInstance)];
-        }
-    } @catch (NSException *exception) {
-        return fallback;
-    }
-    if (!controller) return fallback;
-
-    NSArray *apps = nil;
-    @try {
-        if ([controller respondsToSelector:@selector(allApplications)]) {
-            apps = (NSArray *)[controller performSelector:@selector(allApplications)];
-        }
-    } @catch (NSException *exception) {
-        return fallback;
-    }
-    if (![apps isKindOfClass:[NSArray class]] || apps.count == 0) return fallback;
-
-    NSInteger usable = 0;
-    BOOL frontmost = NO;
-    for (id app in apps) {
+/**
+ * 直接沿用系统状态栏当前的前景色：
+ * 主屏时钟/运营商图标是白色，进入 App 由 App 决定（绝大多数为黑色）。
+ * 这样不用猜前后台，永远和「中国移动」「信号」保持一致。
+ */
+- (UIColor *)statusBarTextColor {
+    UIView *node = self.clockView;
+    for (NSInteger depth = 0; node && depth < 6; depth++) {
         @try {
-            id bundle = [app valueForKey:@"bundleIdentifier"];
-            if ([bundle isKindOfClass:[NSString class]] &&
-                [bundle isEqualToString:@"com.apple.springboard"]) continue;
-            id value = [app valueForKey:@"frontmost"];
-            if ([value isKindOfClass:[NSNumber class]]) {
-                usable++;
-                if ([value boolValue]) frontmost = YES;
+            if ([node respondsToSelector:@selector(textColor)]) {
+                UIColor *textColor = [(UILabel *)node textColor];
+                if ([textColor isKindOfClass:[UIColor class]]) return textColor;
             }
+            id foreground = [node valueForKey:@"foregroundColor"];
+            if ([foreground isKindOfClass:[UIColor class]]) return foreground;
         } @catch (NSException *exception) {
         }
+        node = node.superview;
     }
-    if (usable == 0) return fallback;
-    return frontmost;
+    return UIColor.whiteColor;
 }
 
-/** 主屏用白字（配黑描边），其它 App 用黑字（配白描边） */
-- (UIColor *)normalTextColor {
-    if (self.inApp && GTPrefBool(@"burnin", YES)) return UIColor.blackColor;
-    return UIColor.whiteColor;
+/** 记录一次当前取到的颜色，方便排查（/var/tmp/goldticker.log） */
+static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
+    static NSString *lastKey = nil;
+    @try {
+        NSString *key = [NSString stringWithFormat:@"%@|%@",
+                         clock ? NSStringFromClass(clock.class) : @"nil", color];
+        if (lastKey && [lastKey isEqualToString:key]) return;
+        lastKey = key;
+        NSString *line = [NSString stringWithFormat:@"%@ clock=%@ textColor=%@ -> %@\n",
+                          [NSDate date],
+                          clock ? NSStringFromClass(clock.class) : @"nil",
+                          clock ? [(UILabel *)clock textColor] : @"nil",
+                          color];
+        NSString *path = @"/var/tmp/goldticker.log";
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!handle) {
+            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        } else {
+            [handle seekToEndOfFile];
+            [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            [handle closeFile];
+        }
+    } @catch (NSException *exception) {
+    }
 }
 
 - (void)updateAppearance {
     if (!self.priceLabel) return;
-    BOOL dark = self.inApp && GTPrefBool(@"burnin", YES);
-    if (!self.alerting) self.priceLabel.textColor = [self normalTextColor];
-    // App 内只要纯黑字，不要任何描边/阴影；主屏白字保留黑描边保证可读
-    self.priceLabel.layer.shadowOpacity = dark ? 0.0 : 0.9;
+
+    // 先定位一次，顺带刷新 clockView（颜色就从这个视图上取）
     [self layoutPriceLabel];
+
+    UIColor *color = [self statusBarTextColor];
+    if (!self.alerting) self.priceLabel.textColor = color;
+    GTLogStatusBarColor(self.clockView, color);
+
+    // 浅色（白字）时加一点黑色阴影保证可读；深色（黑字）时完全不要阴影/描边
+    CGFloat red = 0, green = 0, blue = 0, alpha = 0;
+    BOOL isLightText = YES;
+    if ([color getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        isLightText = ((red + green + blue) / 3.0) > 0.6;
+    }
+    self.priceLabel.layer.shadowColor = UIColor.blackColor.CGColor;
+    self.priceLabel.layer.shadowOpacity = isLightText ? 0.55 : 0.0;
 }
 
 - (CGFloat)driftX {
@@ -416,20 +365,8 @@ static NSString *GTBundleOfNotification(NSNotification *note) {
         self.barWindow.hidden = !enabled;
         if (!enabled) return;
 
-        [self layoutPriceLabel];
-
-        self.tickCount = self.tickCount + 1;
-        // 每 3 秒用 SpringBoard 的真实状态校正一次，避免通知漏发导致一直是白字
-        if (self.tickCount % 3 == 0) {
-            BOOL detected = [self detectInAppInsteadOf:self.inApp];
-            if (detected != self.inApp) {
-                self.inApp = detected;
-                [self updateAppearance];
-            }
-        }
-        if (self.tickCount % 10 == 0) {
-            [self updateAppearance];
-        }
+        // 每秒跟着系统状态栏重新取一次颜色，进出 App 无需额外判断
+        [self updateAppearance];
 
         double interval = GTPrefDouble(@"interval", 5.0);
         if (interval < 3.0) interval = 3.0;
@@ -559,7 +496,7 @@ static NSString *GTBundleOfNotification(NSNotification *note) {
 
     if (!alertEnabled || threshold <= 0) {
         self.alerting = NO;
-        self.priceLabel.textColor = [self normalTextColor];
+        self.priceLabel.textColor = [self statusBarTextColor];
         return;
     }
 
@@ -570,7 +507,7 @@ static NSString *GTBundleOfNotification(NSNotification *note) {
             [self fireAlert:price threshold:threshold];
         }
     } else {
-        self.priceLabel.textColor = [self normalTextColor];
+        self.priceLabel.textColor = [self statusBarTextColor];
         // 回升到提醒价上方 0.2% 才重新武装，避免价格贴着阈值反复响
         if (price > threshold * 1.002) self.alerting = NO;
     }
