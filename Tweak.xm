@@ -57,6 +57,8 @@ static NSArray<NSString *> *GTDataDirs(void) {
 
 @property (nonatomic, assign) double lastPrice;
 @property (nonatomic, assign) BOOL alerting;
+/** 当前提醒方向：0 无 / 1 低于下限 / 2 高于上限 */
+@property (nonatomic, assign) NSInteger alertKind;
 @property (nonatomic, assign) NSInteger retry;
 
 /** 防烧屏：每 10 分钟递增一次，用来左右交替微移 */
@@ -91,7 +93,7 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (NSArray *)fieldsFor:(NSString *)code in:(NSString *)text;
 - (void)applyPrice:(double)price;
 - (void)evaluateAlert:(double)price;
-- (void)fireAlert:(double)price threshold:(double)threshold;
+- (void)fireAlert:(double)price low:(double)low high:(double)high kind:(NSInteger)kind;
 - (NSString *)alertPath;
 - (void)playAlert;
 - (void)stopAlertSound;
@@ -497,43 +499,53 @@ static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
 }
 
 - (void)evaluateAlert:(double)price {
-    double threshold = GTPrefDouble(@"threshold", 0);
+    double low = GTPrefDouble(@"threshold_low", 0);
+    if (low <= 0) low = GTPrefDouble(@"threshold", 0);   // 兼容旧版单值设置
+    double high = GTPrefDouble(@"threshold_high", 0);
     BOOL alertEnabled = GTPrefBool(@"alert_enable", YES);
 
-    if (!alertEnabled || threshold <= 0) {
+    if (!alertEnabled || (low <= 0 && high <= 0)) {
         [self stopAlertSound];
         if (self.alerting) {
             self.alerting = NO;
+            self.alertKind = 0;
             [self hideBanner];
         }
         self.priceLabel.textColor = [self statusBarTextColor];
         return;
     }
 
-    if (price < threshold) {
+    BOOL below = (low > 0 && price < low);
+    BOOL above = (high > 0 && price > high);
+
+    if (below || above) {
+        self.alertKind = below ? 1 : 2;
         self.priceLabel.textColor = [UIColor colorWithRed:1.0 green:0.72 blue:0.30 alpha:1.0];
-        if (!self.alerting) {
-            self.alerting = YES;
-            [self fireAlert:price threshold:threshold];
-        } else {
-            // 一直循环提醒：横幅常驻并刷新最新价，音乐停了就续上
-            [self fireAlert:price threshold:threshold];
-        }
+        self.alerting = YES;
+        // 一直循环提醒：横幅常驻并刷新最新价，音乐停了就续上
+        [self fireAlert:price low:low high:high kind:self.alertKind];
     } else {
         self.priceLabel.textColor = [self statusBarTextColor];
-        // 回升到提醒价上方 0.2% 才停止提醒并重新武装，避免价格贴着阈值反复响
-        if (price > threshold * 1.002 && self.alerting) {
-            self.alerting = NO;
-            [self stopAlertSound];
-            [self hideBanner];
+        if (self.alerting) {
+            // 价格回到区间内并越过阈值 0.2% 才停止，避免贴着边界反复响
+            BOOL backInside = YES;
+            if (self.alertKind == 1 && low > 0) backInside = (price > low * 1.002);
+            if (self.alertKind == 2 && high > 0) backInside = (price < high * 0.998);
+            if (backInside) {
+                self.alerting = NO;
+                self.alertKind = 0;
+                [self stopAlertSound];
+                [self hideBanner];
+            }
         }
     }
 }
 
-- (void)fireAlert:(double)price threshold:(double)threshold {
-    [self showBanner:[NSString stringWithFormat:@"金价 %.2f 已低于提醒价 %.2f\n价格回到提醒价上方后自动停止提醒",
-                      price, threshold]
-              sticky:YES];
+- (void)fireAlert:(double)price low:(double)low high:(double)high kind:(NSInteger)kind {
+    NSString *text = (kind == 2)
+        ? [NSString stringWithFormat:@"金价 %.2f 已高于上限 %.2f\n价格回到上限下方后自动停止提醒", price, high]
+        : [NSString stringWithFormat:@"金价 %.2f 已低于下限 %.2f\n价格回到下限上方后自动停止提醒", price, low];
+    [self showBanner:text sticky:YES];
     if (GTPrefBool(@"sound_enable", YES)) {
         if (!self.player.isPlaying) {
             [self playAlert];
