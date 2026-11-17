@@ -79,6 +79,9 @@ static NSArray<NSString *> *GTDataDirs(void) {
 - (CGRect)clockRectOnScreen;
 - (UIView *)clockViewIn:(UIView *)root regex:(NSRegularExpression *)regex;
 - (void)layoutPriceLabel;
+- (void)observeClockView:(UIView *)view;
+- (void)stopObservingClockView;
+- (void)syncAppearanceNow;
 - (void)onTick:(NSTimer *)timer;
 - (void)refresh;
 - (void)refreshSina;
@@ -208,7 +211,7 @@ static NSArray<NSString *> *GTDataDirs(void) {
         if (window == self.barWindow || window == self.bannerWindow) continue;
         UIView *view = [self clockViewIn:window regex:regex];
         if (view) {
-            self.clockView = view;
+            [self observeClockView:view];
             CGRect rect = [view convertRect:view.bounds toView:nil];
             return CGRectOffset(rect, window.frame.origin.x, window.frame.origin.y);
         }
@@ -230,6 +233,46 @@ static NSArray<NSString *> *GTDataDirs(void) {
         if (found) return found;
     }
     return nil;
+}
+
+/**
+ * 监听时钟视图的颜色属性变化。
+ * 系统切换前台 App 时会立刻改写状态栏前景色（时钟文字的 textColor / 富文本颜色），
+ * KVO 能在这个瞬间回调，比 1 秒轮询快得多，做到与信号图标同步变色。
+ */
+- (void)observeClockView:(UIView *)view {
+    if (view == (UIView *)self.clockView) return;
+    [self stopObservingClockView];
+    self.clockView = view;
+    for (NSString *key in @[@"textColor", @"attributedText", @"foregroundColor"]) {
+        @try {
+            [view addObserver:self
+                   forKeyPath:key
+                      options:NSKeyValueObservingOptionNew
+                      context:NULL];
+        } @catch (NSException *exception) {
+        }
+    }
+}
+
+- (void)stopObservingClockView {
+    UIView *old = self.clockView;
+    if (!old) return;
+    for (NSString *key in @[@"textColor", @"attributedText", @"foregroundColor"]) {
+        @try {
+            [old removeObserver:self forKeyPath:key];
+        } @catch (NSException *exception) {
+        }
+    }
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary *)change
+                       context:(void *)context {
+    if (object != (id)self.clockView) return;
+    // 颜色变化直接在本次 runloop 里应用，避免等下一个 1 秒定时器
+    [self syncAppearanceNow];
 }
 
 - (void)layoutPriceLabel {
@@ -336,13 +379,19 @@ static void GTLogStatusBarColor(UIView *clock, UIColor *color) {
 }
 
 - (void)updateAppearance {
-    if (!self.priceLabel) return;
-
     // 先定位一次，顺带刷新 clockView（颜色就从这个视图上取）
     [self layoutPriceLabel];
+    [self syncAppearanceNow];
+}
+
+/** 只同步颜色/阴影，不做布局，KVO 回调里也用它，保证毫秒级响应 */
+- (void)syncAppearanceNow {
+    if (!self.priceLabel || self.alerting) return;
 
     UIColor *color = [self statusBarTextColor];
-    if (!self.alerting) self.priceLabel.textColor = color;
+    if (![self.priceLabel.textColor isEqual:color]) {
+        self.priceLabel.textColor = color;
+    }
     GTLogStatusBarColor(self.clockView, color);
 
     // 浅色（白字）时加一点黑色阴影保证可读；深色（黑字）时完全不要阴影/描边
