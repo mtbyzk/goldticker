@@ -42,6 +42,7 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
 @property (nonatomic, strong) UISwitch *burninSwitch;
 @property (nonatomic, strong) UITextField *intervalField;
 @property (nonatomic, strong) UITextField *thresholdField;
+@property (nonatomic, strong) UITextField *thresholdHighField;
 @property (nonatomic, strong) UISlider *offsetXSlider;
 @property (nonatomic, strong) UISlider *offsetYSlider;
 @property (nonatomic, strong) UISlider *fontSizeSlider;
@@ -90,7 +91,7 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
     // 开关行
     self.enabledSwitch = [self addSwitchRow:@"在状态栏显示金价"
                                       value:GTPrefBool(@"enable", YES)];
-    self.alertSwitch = [self addSwitchRow:@"跌破提醒"
+    self.alertSwitch = [self addSwitchRow:@"区间提醒"
                                     value:GTPrefBool(@"alert_enable", YES)];
     self.soundSwitch = [self addSwitchRow:@"提醒时播放音乐"
                                     value:GTPrefBool(@"sound_enable", YES)];
@@ -102,9 +103,13 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
     NSString *intervalText = [NSString stringWithFormat:@"%.0f", interval];
     self.intervalField = [self addFieldRow:@"刷新间隔（秒，最小 3）" text:intervalText keyboard:UIKeyboardTypeNumberPad];
 
-    id threshold = GTPref(@"threshold");
-    NSString *thresholdText = threshold ? [NSString stringWithFormat:@"%.2f", [threshold doubleValue]] : @"";
-    self.thresholdField = [self addFieldRow:@"提醒金额（元/克）" text:thresholdText keyboard:UIKeyboardTypeDecimalPad];
+    id low = GTPref(@"threshold_low") ?: GTPref(@"threshold");
+    NSString *lowText = low ? [NSString stringWithFormat:@"%.2f", [low doubleValue]] : @"";
+    self.thresholdField = [self addFieldRow:@"低于该价格提醒（元/克，留空不启用）" text:lowText keyboard:UIKeyboardTypeDecimalPad];
+
+    id high = GTPref(@"threshold_high");
+    NSString *highText = high ? [NSString stringWithFormat:@"%.2f", [high doubleValue]] : @"";
+    self.thresholdHighField = [self addFieldRow:@"高于该价格提醒（元/克，留空不启用）" text:highText keyboard:UIKeyboardTypeDecimalPad];
 
     // 位置微调
     self.offsetXValue = [[UILabel alloc] init];
@@ -129,7 +134,7 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
                                        label:self.fontSizeValue];
     [self refreshSliderLabels];
 
-    [stack addArrangedSubview:GTLabel(@"留空表示不提醒。价格跌破该值时会播放音乐并弹出横幅；价格回升到 1.002 倍以上才会重新武装。",
+    [stack addArrangedSubview:GTLabel(@"两个都可以留空。低于下限或高于上限时都会持续播放音乐并弹出横幅；价格回到区间内（并越过阈值 0.2%）后自动停止提醒。",
                                       [UIFont systemFontOfSize:13],
                                       [UIColor secondaryLabelColor])];
     [stack addArrangedSubview:GTLabel(@"位置是相对「时钟右侧默认位置」的偏移量，保存后 1 秒内生效。若防烧屏开着，价签还会每 10 分钟自动左右微移 1pt（不再上下移动）。",
@@ -244,13 +249,21 @@ static UILabel *GTLabel(NSString *text, UIFont *font, UIColor *color) {
     if (interval < 3.0) interval = 3.0;
     GTPrefSet(@"interval", @(interval));
 
-    NSString *thresholdText = [self.thresholdField.text
+    NSString *lowText = [self.thresholdField.text
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    double threshold = thresholdText.length ? [thresholdText doubleValue] : 0.0;
-    if (threshold > 0) {
-        GTPrefSet(@"threshold", @(threshold));
-    } else {
-        GTPrefSet(@"threshold", nil);
+    double low = lowText.length ? [lowText doubleValue] : 0.0;
+    GTPrefSet(@"threshold_low", low > 0 ? @(low) : nil);
+    GTPrefSet(@"threshold", nil);   // 旧的单值字段不再使用
+
+    NSString *highText = [self.thresholdHighField.text
+        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    double high = highText.length ? [highText doubleValue] : 0.0;
+    GTPrefSet(@"threshold_high", high > 0 ? @(high) : nil);
+
+    // 上限必须高于下限，填反了直接清掉上限
+    if (low > 0 && high > 0 && high <= low) {
+        GTPrefSet(@"threshold_high", nil);
+        self.thresholdHighField.text = @"";
     }
 
     self.intervalField.text = [NSString stringWithFormat:@"%.0f", interval];
